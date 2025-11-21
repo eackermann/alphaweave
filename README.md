@@ -36,6 +36,7 @@ alphaweave is a backtesting framework for Python 3.11+ that provides:
 - **Analysis Tools**: Walk-forward analysis, robustness testing, parameter sweeps
 - **Advanced Metrics**: Rolling Sharpe, drawdown, volatility; trade analytics; factor regression
 - **Report Generation**: HTML/Markdown reports with embedded plots and comprehensive analysis
+- **Portfolio Optimization**: Mean-variance, risk parity, minimum variance, target volatility optimizers
 
 ## Quick Start
 
@@ -179,6 +180,38 @@ html = generate_html_report(
 )
 with open("report.html", "w") as f:
     f.write(html)
+```
+
+### Portfolio Optimization
+
+Build optimized portfolios using standard optimizers:
+
+```python
+from alphaweave.portfolio.optimizers import risk_parity, min_variance, target_volatility
+from alphaweave.portfolio.risk import estimate_covariance
+from alphaweave.portfolio.universe import top_n_by_score, normalize_scores_to_weights
+
+class OptimizedPortfolio(Strategy):
+    def init(self):
+        self.assets = ["SPY", "TLT", "GLD", "QQQ"]
+        self.lookback = 60
+    
+    def next(self, i):
+        if not (self.schedule.every("1M") and self.schedule.at_close()):
+            return
+        
+        # Get historical returns
+        returns_df = self._get_recent_returns(self.assets, self.lookback)
+        
+        # Estimate covariance
+        cov = estimate_covariance(returns_df, method="ewma")
+        
+        # Optimize: risk parity
+        result = risk_parity(cov)
+        
+        # Apply weights
+        for symbol, w in result.weights.items():
+            self.order_target_percent(symbol, w)
 ```
 
 ## Documentation

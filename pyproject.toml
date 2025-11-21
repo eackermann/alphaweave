@@ -9,6 +9,7 @@ dependencies = [
     "numpy>=1.25",
     "polars>=0.19",
     "pyarrow>=10.0",
+    "scipy>=1.10",
 ]
 
 [project.optional-dependencies]

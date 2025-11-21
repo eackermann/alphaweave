@@ -84,6 +84,11 @@ alphaweave/
 │   │   ├── walkforward.py   # Walk-forward analysis
 │   │   ├── robustness.py   # Robustness testing
 │   │   └── factors.py       # Factor regression and decomposition
+│   ├── portfolio/           # Portfolio construction and optimization
+│   │   ├── optimizers.py    # Portfolio optimizers (mean-variance, risk parity, etc.)
+│   │   ├── constraints.py  # Portfolio constraint definitions
+│   │   ├── risk.py          # Risk estimation helpers
+│   │   └── universe.py      # Universe selection and ranking utilities
 │   └── utils/               # Utilities
 │       ├── time.py          # Time utilities
 │       ├── patterns.py      # Pattern matching
@@ -324,6 +329,23 @@ Main backtesting engine:
 - Can be used independently or with backtester
 - Parallel processing support for parameter sweeps (n_jobs parameter)
 - Factor regression uses numpy OLS for performance
+
+### `alphaweave.portfolio`
+
+**Purpose:** Portfolio construction and optimization
+
+**Key Components:**
+- `optimizers`: Portfolio optimizers (equal weight, mean-variance, min-variance, risk parity, target volatility)
+- `constraints`: Portfolio constraint definitions (weight bounds, long-only, leverage caps)
+- `risk`: Risk estimation helpers (covariance, volatility)
+- `universe`: Universe selection and ranking utilities
+
+**Design Notes:**
+- Optimizers are pure functions - no implicit data access
+- Strategies build inputs (returns, covariance) and call optimizers
+- Optimizers return weights that strategies apply via order_target_percent
+- Uses scipy.optimize for constrained optimization
+- Supports both sample and EWMA covariance estimation
 
 ---
 
@@ -611,7 +633,7 @@ Test coverage includes:
 
 ## Version History
 
-**0.0.1 (Sprint 0-9):**
+**0.0.1 (Sprint 0-11):**
 - Initial framework
 - Frame abstraction
 - Strategy API
@@ -627,6 +649,7 @@ Test coverage includes:
 - Event engine & scheduling (weekly/monthly boundaries, earnings events)
 - Performance optimizations (fast mode, caching, parallel sweeps)
 - Advanced metrics & reporting (rolling metrics, trade analytics, factor regression, HTML reports)
+- Portfolio optimization (mean-variance, risk parity, min-variance, target volatility)
 
 ---
 

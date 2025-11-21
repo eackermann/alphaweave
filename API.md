@@ -1239,7 +1239,197 @@ import polars as pl
 
 ---
 
+---
+
+## Portfolio Optimization
+
+### `alphaweave.portfolio.optimizers`
+
+Portfolio optimization algorithms for constructing optimal asset allocations.
+
+#### `equal_weight(assets: Sequence[str], *, constraints: Optional[PortfolioConstraints] = None) -> OptimizationResult`
+
+Equal weight portfolio optimizer.
+
+**Parameters:**
+- `assets` (Sequence[str]): List of asset identifiers
+- `constraints` (Optional[PortfolioConstraints]): Optional portfolio constraints
+
+**Returns:**
+- `OptimizationResult` with equal weights
+
+**Example:**
+```python
+from alphaweave.portfolio.optimizers import equal_weight
+
+result = equal_weight(["AAPL", "MSFT", "GOOG"])
+weights = result.weights  # Series with equal weights (1/3 each)
+```
+
+---
+
+#### `mean_variance(expected_returns: Weights, cov_matrix: pd.DataFrame, *, risk_free_rate: float = 0.0, max_weight: Optional[float] = None, constraints: Optional[PortfolioConstraints] = None) -> OptimizationResult`
+
+Mean-variance optimizer (maximize Sharpe ratio).
+
+**Parameters:**
+- `expected_returns` (Weights): Expected returns per asset
+- `cov_matrix` (pd.DataFrame): Covariance matrix
+- `risk_free_rate` (float): Risk-free rate for Sharpe calculation
+- `max_weight` (Optional[float]): Maximum weight per asset
+- `constraints` (Optional[PortfolioConstraints]): Optional portfolio constraints
+
+**Returns:**
+- `OptimizationResult` with optimized weights
+
+**Example:**
+```python
+from alphaweave.portfolio.optimizers import mean_variance
+
+expected_returns = pd.Series({"AAPL": 0.10, "MSFT": 0.08, "GOOG": 0.06})
+cov_matrix = pd.DataFrame({...})  # Covariance matrix
+
+result = mean_variance(expected_returns, cov_matrix)
+weights = result.weights  # Optimized weights maximizing Sharpe
+```
+
+---
+
+#### `min_variance(cov_matrix: pd.DataFrame, *, max_weight: Optional[float] = None, constraints: Optional[PortfolioConstraints] = None) -> OptimizationResult`
+
+Minimum variance optimizer.
+
+**Parameters:**
+- `cov_matrix` (pd.DataFrame): Covariance matrix
+- `max_weight` (Optional[float]): Maximum weight per asset
+- `constraints` (Optional[PortfolioConstraints]): Optional portfolio constraints
+
+**Returns:**
+- `OptimizationResult` with minimum variance weights
+
+---
+
+#### `risk_parity(cov_matrix: pd.DataFrame, *, constraints: Optional[PortfolioConstraints] = None) -> OptimizationResult`
+
+Risk parity optimizer (equal risk contribution).
+
+**Parameters:**
+- `cov_matrix` (pd.DataFrame): Covariance matrix
+- `constraints` (Optional[PortfolioConstraints]): Optional portfolio constraints
+
+**Returns:**
+- `OptimizationResult` with risk parity weights
+
+---
+
+#### `target_volatility(base_weights: Weights, cov_matrix: pd.DataFrame, *, target_vol: float, max_leverage: Optional[float] = None) -> OptimizationResult`
+
+Target volatility allocator.
+
+**Parameters:**
+- `base_weights` (Weights): Base portfolio weights
+- `cov_matrix` (pd.DataFrame): Covariance matrix
+- `target_vol` (float): Target annualized volatility (e.g., 0.10 for 10%)
+- `max_leverage` (Optional[float]): Maximum leverage
+
+**Returns:**
+- `OptimizationResult` with scaled weights
+
+---
+
+### `alphaweave.portfolio.risk`
+
+Risk estimation helpers for portfolio optimization.
+
+#### `estimate_covariance(returns: pd.DataFrame, *, method: str = "sample", span: int = 60) -> pd.DataFrame`
+
+Estimate asset return covariance matrix.
+
+**Parameters:**
+- `returns` (pd.DataFrame): DataFrame with columns = assets, index = dates
+- `method` (str): Estimation method ("sample" or "ewma")
+- `span` (int): Span parameter for EWMA
+
+**Returns:**
+- Covariance matrix DataFrame
+
+#### `estimate_volatility(returns: pd.DataFrame, *, method: str = "sample", span: int = 60, trading_days: int = 252) -> pd.Series`
+
+Per-asset volatility estimate.
+
+**Parameters:**
+- `returns` (pd.DataFrame): DataFrame with columns = assets, index = dates
+- `method` (str): Estimation method ("sample" or "ewma")
+- `span` (int): Span parameter for EWMA
+- `trading_days` (int): Trading days per year for annualization
+
+**Returns:**
+- Series of annualized volatilities
+
+---
+
+### `alphaweave.portfolio.universe`
+
+Universe selection and ranking utilities.
+
+#### `top_n_by_score(scores: pd.Series, n: int, *, ascending: bool = False) -> Sequence[str]`
+
+Select top-N assets by score.
+
+**Parameters:**
+- `scores` (pd.Series): Series indexed by asset
+- `n` (int): Number of top assets to select
+- `ascending` (bool): If True, select bottom-N
+
+**Returns:**
+- List of asset identifiers
+
+#### `normalize_scores_to_weights(scores: pd.Series, *, long_only: bool = True) -> pd.Series`
+
+Map arbitrary scores to portfolio weights.
+
+**Parameters:**
+- `scores` (pd.Series): Series indexed by asset with arbitrary scores
+- `long_only` (bool): If True, set negative scores to 0 before normalizing
+
+**Returns:**
+- Series of normalized weights (sums to 1.0)
+
+---
+
+### `alphaweave.portfolio.constraints`
+
+Portfolio constraint definitions.
+
+#### `PortfolioConstraints`
+
+```python
+@dataclass
+class PortfolioConstraints:
+    weight_bounds: Optional[Mapping[str, WeightBounds]] = None
+    default_bounds: Optional[WeightBounds] = None
+    target_gross: Optional[float] = 1.0
+    long_only: bool = True
+```
+
+**Attributes:**
+- `weight_bounds`: Per-asset weight bounds
+- `default_bounds`: Fallback bounds for assets not in weight_bounds
+- `target_gross`: Target gross exposure (sum of absolute weights)
+- `long_only`: If True, enforce long-only constraint
+
+#### `WeightBounds`
+
+```python
+@dataclass
+class WeightBounds:
+    lower: float  # e.g. 0.0 for long-only
+    upper: float  # e.g. 0.1 for 10% cap
+```
+
+---
+
 ## Version
 
-This documentation corresponds to **alphaweave version 0.0.1** (Sprint 0).
+This documentation corresponds to **alphaweave version 0.0.1** (Sprints 0-11).
 
