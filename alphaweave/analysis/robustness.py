@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from itertools import product
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -93,27 +94,78 @@ def run_multi_start(
     return MultiRunResult(results=results)
 
 
+def _run_single_config(args: tuple) -> tuple[Dict[str, Any], BacktestResult]:
+    """
+    Worker function for parallel parameter sweep.
+
+    Must be top-level for pickling.
+    """
+    (
+        strategy_cls,
+        data,
+        params,
+        capital,
+        backtester_kwargs,
+    ) = args
+
+    backtester = VectorBacktester(**backtester_kwargs)
+    result = backtester.run(
+        strategy_cls,
+        data=data,
+        capital=capital,
+        strategy_kwargs=params,
+    )
+    return params, result
+
+
 def parameter_sweep(
     backtester: VectorBacktester,
     strategy_cls: type[Strategy],
     data,
     param_grid: Dict[str, Sequence[Any]],
     capital: float = 100_000.0,
+    n_jobs: int = 1,
 ) -> SweepResult:
-    """Grid search over strategy keyword arguments."""
+    """
+    Grid search over strategy keyword arguments.
+
+    Args:
+        backtester: VectorBacktester instance (used for configuration)
+        strategy_cls: Strategy class
+        data: Data for backtest
+        param_grid: Dictionary mapping parameter names to lists of values
+        capital: Starting capital
+        n_jobs: Number of parallel jobs (1 = sequential, >1 = parallel)
+
+    Returns:
+        SweepResult with all parameter combinations and results
+    """
     entries: List[SweepEntry] = []
     keys = list(param_grid.keys())
     grid_values = [list(param_grid[key]) for key in keys]
 
+    # Prepare jobs
+    jobs = []
     for combo in product(*grid_values):
         params = dict(zip(keys, combo))
-        result = backtester.run(
-            strategy_cls,
-            data=data,
-            capital=capital,
-            strategy_kwargs=params,
-        )
-        entries.append(SweepEntry(params=params, result=result))
+        # Extract backtester configuration
+        backtester_kwargs = {
+            "performance_mode": getattr(backtester, "performance_mode", "default"),
+        }
+        jobs.append((strategy_cls, data, params, capital, backtester_kwargs))
+
+    # Execute jobs
+    if n_jobs == 1:
+        # Sequential execution
+        for job in jobs:
+            params, result = _run_single_config(job)
+            entries.append(SweepEntry(params=params, result=result))
+    else:
+        # Parallel execution
+        with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+            results = list(executor.map(_run_single_config, jobs))
+            for params, result in results:
+                entries.append(SweepEntry(params=params, result=result))
 
     return SweepResult(entries=entries)
 

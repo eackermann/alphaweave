@@ -88,6 +88,14 @@ def _normalize_ohlcv_dataframe(
     # Parse datetime and drop invalid
     df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
     df = df.dropna(subset=["datetime"])
+    
+    # Handle timezone if provided
+    if "datetime" in df.columns and isinstance(df["datetime"].dtype, pd.DatetimeTZDtype):
+        # Already timezone-aware
+        pass
+    elif "datetime" in df.columns:
+        # Naive datetime - will be handled by tz parameter if provided
+        pass
 
     # --- Drop obvious vendor header rows / garbage ---
     # e.g., rows where OHLCV columns are all NaN or all non-numeric
@@ -151,7 +159,7 @@ def _attach_symbol(df: pd.DataFrame, symbol: Optional[str], path: str) -> pd.Dat
 # CSV loader
 # ---------------------------------------------------------------------
 
-def load_csv(path: str, symbol: Optional[str] = None) -> Frame:
+def load_csv(path: str, symbol: Optional[str] = None, tz: Optional[str] = None) -> Frame:
     """
     Load a CSV with OHLCV data into a Frame.
 
@@ -179,6 +187,21 @@ def load_csv(path: str, symbol: Optional[str] = None) -> Frame:
     # Normalize OHLCV + datetime
     df = _normalize_ohlcv_dataframe(df, path=path, prefer_adj_close=True)
 
+    # Handle timezone: localize to tz if provided, then convert to UTC
+    # After normalization, datetime is in the index
+    if isinstance(df.index, pd.DatetimeIndex):
+        if tz is not None:
+            # Localize naive timestamps to specified timezone, then convert to UTC
+            if df.index.tz is None:
+                df.index = df.index.tz_localize(tz).tz_convert("UTC")
+            else:
+                # Already timezone-aware, just convert to UTC
+                df.index = df.index.tz_convert("UTC")
+        elif df.index.tz is not None:
+            # Already timezone-aware, ensure UTC
+            if str(df.index.tz) != "UTC":
+                df.index = df.index.tz_convert("UTC")
+
     # Attach symbol (explicit or inferred)
     df = _attach_symbol(df, symbol, path)
 
@@ -190,7 +213,7 @@ def load_csv(path: str, symbol: Optional[str] = None) -> Frame:
 # Parquet loader
 # ---------------------------------------------------------------------
 
-def load_parquet(path: str, symbol: Optional[str] = None) -> Frame:
+def load_parquet(path: str, symbol: Optional[str] = None, tz: Optional[str] = None) -> Frame:
     """
     Load a Parquet file with OHLCV data into a Frame.
 
@@ -204,6 +227,22 @@ def load_parquet(path: str, symbol: Optional[str] = None) -> Frame:
     df = pd.read_parquet(path)
 
     df = _normalize_ohlcv_dataframe(df, path=path, prefer_adj_close=True)
+    
+    # Handle timezone: localize to tz if provided, then convert to UTC
+    # After normalization, datetime is in the index
+    if isinstance(df.index, pd.DatetimeIndex):
+        if tz is not None:
+            # Localize naive timestamps to specified timezone, then convert to UTC
+            if df.index.tz is None:
+                df.index = df.index.tz_localize(tz).tz_convert("UTC")
+            else:
+                # Already timezone-aware, just convert to UTC
+                df.index = df.index.tz_convert("UTC")
+        elif df.index.tz is not None:
+            # Already timezone-aware, ensure UTC
+            if str(df.index.tz) != "UTC":
+                df.index = df.index.tz_convert("UTC")
+    
     df = _attach_symbol(df, symbol, path)
 
     return Frame.from_pandas(df)

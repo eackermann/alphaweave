@@ -72,4 +72,7 @@ def test_strategy_now_returns_timestamp():
     timestamps = TimestampCaptureStrategy.timestamps
     assert len(timestamps) == len(result.equity_series)
     expected = list(frame.to_pandas().index)
-    assert timestamps == expected
+    # now() now returns UTC-aware timestamps
+    # Convert expected to UTC-aware for comparison
+    expected_utc = [ts.tz_localize("UTC") if ts.tz is None else ts.tz_convert("UTC") for ts in expected]
+    assert timestamps == expected_utc

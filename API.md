@@ -13,6 +13,7 @@ Complete API reference for the alphaweave backtesting framework.
 - [Core Types](#core-types)
 - [Frame Abstraction](#frame-abstraction)
 - [Data Loaders](#data-loaders)
+- [Corporate Actions](#corporate-actions)
 - [Strategy API](#strategy-api)
 - [Backtesting Engine](#backtesting-engine)
 - [Results](#results)
@@ -328,6 +329,247 @@ frame = load_parquet("data/AAPL.parquet", symbol="AAPL")
 
 ---
 
+## Corporate Actions
+
+### `alphaweave.data.corporate_actions.SplitAction`
+
+Represents a stock split action.
+
+```python
+@dataclass
+class SplitAction:
+    symbol: str
+    date: datetime
+    ratio: float  # e.g., 2.0 for a 2-for-1 split
+```
+
+**Attributes:**
+- `symbol` (str): Stock symbol
+- `date` (datetime): Split date
+- `ratio` (float): Split ratio (e.g., 2.0 for 2-for-1, 4.0 for 4-for-1)
+
+**Example:**
+```python
+from alphaweave.data.corporate_actions import SplitAction
+from datetime import datetime
+
+split = SplitAction(
+    symbol="AAPL",
+    date=datetime(2020, 8, 31),
+    ratio=4.0  # 4-for-1 split
+)
+```
+
+---
+
+### `alphaweave.data.corporate_actions.DividendAction`
+
+Represents a cash dividend action.
+
+```python
+@dataclass
+class DividendAction:
+    symbol: str
+    date: datetime
+    amount: float  # dividend per share
+```
+
+**Attributes:**
+- `symbol` (str): Stock symbol
+- `date` (datetime): Dividend payment date
+- `amount` (float): Dividend amount per share
+
+**Example:**
+```python
+from alphaweave.data.corporate_actions import DividendAction
+from datetime import datetime
+
+dividend = DividendAction(
+    symbol="AAPL",
+    date=datetime(2023, 11, 16),
+    amount=0.24  # $0.24 per share
+)
+```
+
+---
+
+### `alphaweave.data.corporate_actions.CorporateActionsStore`
+
+Stores and provides access to corporate actions by symbol and date.
+
+```python
+class CorporateActionsStore:
+    def add_split(self, split: SplitAction) -> None
+    def add_dividend(self, dividend: DividendAction) -> None
+    def get_splits_on_date(self, symbol: str, date: datetime) -> List[SplitAction]
+    def get_dividends_on_date(self, symbol: str, date: datetime) -> List[DividendAction]
+    def has_actions_for_symbol(self, symbol: str) -> bool
+```
+
+**Methods:**
+
+- `add_split(split: SplitAction) -> None`: Add a split action to the store
+- `add_dividend(dividend: DividendAction) -> None`: Add a dividend action to the store
+- `get_splits_on_date(symbol: str, date: datetime) -> List[SplitAction]`: Get all splits for a symbol on a specific date
+- `get_dividends_on_date(symbol: str, date: datetime) -> List[DividendAction]`: Get all dividends for a symbol on a specific date
+- `has_actions_for_symbol(symbol: str) -> bool`: Check if there are any corporate actions for a symbol
+
+**Example:**
+```python
+from alphaweave.data.corporate_actions import (
+    CorporateActionsStore,
+    SplitAction,
+    DividendAction,
+)
+from datetime import datetime
+
+store = CorporateActionsStore()
+
+# Add a split
+split = SplitAction(symbol="AAPL", date=datetime(2020, 8, 31), ratio=4.0)
+store.add_split(split)
+
+# Add a dividend
+dividend = DividendAction(symbol="AAPL", date=datetime(2023, 11, 16), amount=0.24)
+store.add_dividend(dividend)
+
+# Retrieve actions
+splits = store.get_splits_on_date("AAPL", datetime(2020, 8, 31))
+dividends = store.get_dividends_on_date("AAPL", datetime(2023, 11, 16))
+```
+
+---
+
+### `alphaweave.data.corporate_actions.load_splits_csv`
+
+```python
+load_splits_csv(path: str) -> List[SplitAction]
+```
+
+Load split actions from a CSV file.
+
+**Expected CSV format:**
+```csv
+symbol,date,ratio
+AAPL,2020-08-31,4.0
+MSFT,2003-02-18,2.0
+```
+
+**Parameters:**
+- `path` (str): Path to CSV file
+
+**Returns:**
+- `List[SplitAction]`: List of split actions
+
+**Example:**
+```python
+from alphaweave.data.corporate_actions import load_splits_csv
+
+splits = load_splits_csv("data/splits.csv")
+```
+
+---
+
+### `alphaweave.data.corporate_actions.load_dividends_csv`
+
+```python
+load_dividends_csv(path: str) -> List[DividendAction]
+```
+
+Load dividend actions from a CSV file.
+
+**Expected CSV format:**
+```csv
+symbol,date,amount
+AAPL,2023-11-16,0.24
+MSFT,2023-11-15,0.75
+```
+
+**Parameters:**
+- `path` (str): Path to CSV file
+
+**Returns:**
+- `List[DividendAction]`: List of dividend actions
+
+**Example:**
+```python
+from alphaweave.data.corporate_actions import load_dividends_csv
+
+dividends = load_dividends_csv("data/dividends.csv")
+```
+
+---
+
+### `alphaweave.data.corporate_actions.build_corporate_actions_store`
+
+```python
+build_corporate_actions_store(
+    splits: Optional[List[SplitAction]] = None,
+    dividends: Optional[List[DividendAction]] = None,
+) -> CorporateActionsStore
+```
+
+Build a CorporateActionsStore from lists of splits and dividends.
+
+**Parameters:**
+- `splits` (Optional[List[SplitAction]]): Optional list of split actions
+- `dividends` (Optional[List[DividendAction]]): Optional list of dividend actions
+
+**Returns:**
+- `CorporateActionsStore`: Store containing all provided actions
+
+**Example:**
+```python
+from alphaweave.data.corporate_actions import (
+    build_corporate_actions_store,
+    SplitAction,
+    DividendAction,
+)
+from datetime import datetime
+
+splits = [
+    SplitAction(symbol="AAPL", date=datetime(2020, 8, 31), ratio=4.0),
+]
+dividends = [
+    DividendAction(symbol="AAPL", date=datetime(2023, 11, 16), amount=0.24),
+]
+
+store = build_corporate_actions_store(splits=splits, dividends=dividends)
+```
+
+---
+
+### `alphaweave.engine.portfolio.Portfolio.apply_split`
+
+```python
+apply_split(symbol: str, ratio: float) -> None
+```
+
+Apply a stock split to a position. Adjusts position size and cost basis per share so that total position cost remains unchanged.
+
+**Parameters:**
+- `symbol` (str): Symbol of the position to split
+- `ratio` (float): Split ratio (e.g., 2.0 for a 2-for-1 split)
+
+**Behavior:**
+- Multiplies position size by ratio
+- Divides cost basis per share by ratio
+- Keeps total position cost unchanged
+
+**Example:**
+```python
+from alphaweave.engine.portfolio import Portfolio
+
+portfolio = Portfolio(starting_cash=10000.0)
+# ... after buying 100 shares at $50 ...
+
+# Apply 2-for-1 split
+portfolio.apply_split("AAPL", ratio=2.0)
+# Now: 200 shares at $25 avg_price (total cost unchanged)
+```
+
+---
+
 ## Strategy API
 
 ### `alphaweave.strategy.base.Strategy`
@@ -482,7 +724,7 @@ The VectorBacktester implements a simple execution model:
 
 #### Methods
 
-##### `run(strategy_cls, data, capital=100_000.0) -> BacktestResult`
+##### `run(strategy_cls, data, capital=100_000.0, ..., corporate_actions=None) -> BacktestResult`
 
 Run the backtest and return results.
 
@@ -490,14 +732,32 @@ Run the backtest and return results.
 - `strategy_cls` (Type[Strategy]): Strategy class to instantiate
 - `data` (Dict[str, Frame]): Dictionary mapping symbol names to Frame objects
 - `capital` (float): Starting capital (default: 100,000.0)
+- `fees` (Optional[FeesModel]): Fees model (default: NoFees)
+- `slippage` (Optional[SlippageModel]): Slippage model (default: NoSlippage)
+- `strategy_kwargs` (Optional[Dict[str, Any]]): Keyword arguments to pass to strategy constructor
+- `volume_limit` (Optional[VolumeLimitModel]): Volume limit model (default: VolumeLimitModel)
+- `risk_limits` (Optional[RiskLimits]): Risk limits (default: RiskLimits)
+- `corporate_actions` (Optional[CorporateActionsStore]): Corporate actions store for splits and dividends (default: None)
 
 **Returns:**
 - `BacktestResult`: Results containing equity series and trades
+
+**Corporate Actions:**
+When `corporate_actions` is provided, the backtester will:
+- Apply stock splits before processing orders on each bar (adjusts position size and cost basis)
+- Apply cash dividends before processing orders on each bar (credits cash to portfolio)
+- Ensure portfolio value remains consistent across splits
 
 **Example:**
 ```python
 from alphaweave.engine.vector import VectorBacktester
 from alphaweave.core.frame import Frame
+from alphaweave.data.corporate_actions import (
+    build_corporate_actions_store,
+    SplitAction,
+    DividendAction,
+)
+from datetime import datetime
 
 # Prepare data
 data = {
@@ -505,12 +765,22 @@ data = {
     "MSFT": frame_msft
 }
 
+# Create corporate actions store
+splits = [SplitAction(symbol="AAPL", date=datetime(2020, 8, 31), ratio=4.0)]
+dividends = [DividendAction(symbol="AAPL", date=datetime(2023, 11, 16), amount=0.24)]
+corporate_actions = build_corporate_actions_store(splits=splits, dividends=dividends)
+
 # Run backtest
 backtester = VectorBacktester()
-result = backtester.run(MyStrategy, data, capital=100000.0)
+result = backtester.run(
+    MyStrategy,
+    data,
+    capital=100000.0,
+    corporate_actions=corporate_actions
+)
 
 # Access results
-print(f"Final equity: ${result.equity_series[-1]:,.2f}")
+print(f"Final equity: ${result.equity_series.iloc[-1]:,.2f}")
 print(f"Number of trades: {len(result.trades)}")
 ```
 
@@ -526,28 +796,187 @@ print(f"Number of trades: {len(result.trades)}")
 
 ### `alphaweave.results.result.BacktestResult`
 
-Container for backtest results.
+Container for backtest results with comprehensive metrics and analytics.
 
 #### Constructor
 
 ```python
-BacktestResult(equity_series: List[float], trades: List[Any])
+BacktestResult(
+    equity_series: List[float],
+    trades: List[Any],
+    timestamps: Optional[List[Any]] = None
+)
 ```
 
 **Parameters:**
 - `equity_series` (List[float]): List of equity values, one per bar
 - `trades` (List[Any]): List of trade/fill records (Fill objects)
+- `timestamps` (Optional[List[Any]]): Optional timestamps for equity series
 
 ---
 
 #### Attributes
 
-- `equity_series` (List[float]): Equity curve values (one per bar)
-- `trades` (List[Fill]): List of executed trades (Fill objects)
+- `equity_series` (pd.Series): Equity curve values (indexed by timestamp if provided)
+- `trades` (pd.DataFrame): Standardized trades DataFrame with columns:
+  - `symbol`, `entry_time`, `exit_time`, `entry_price`, `exit_price`
+  - `size`, `pnl`, `pnl_pct`, `duration`, `fees`, `slippage`, `direction`
+- `returns` (pd.Series): Returns series (pct_change of equity)
 
 ---
 
-#### Methods
+#### Properties
+
+##### `final_equity: float`
+
+Final equity value.
+
+##### `total_return: float`
+
+Total return as a decimal (e.g., 0.10 for 10%).
+
+##### `max_drawdown: float`
+
+Maximum drawdown as a decimal.
+
+##### `sharpe(rf_annual=0.0, periods_per_year=252) -> float`
+
+Annualized Sharpe ratio.
+
+---
+
+#### Rolling Metrics
+
+##### `rolling_return(window: str = "63D", freq: Literal["calendar", "bars"] = "calendar") -> pd.Series`
+
+Rolling cumulative return over a lookback window.
+
+**Parameters:**
+- `window` (str): Window size (e.g., "63D" for calendar, "63" for bars)
+- `freq` (Literal): "calendar" for time-based or "bars" for bar-count
+
+**Returns:**
+- `pd.Series`: Series of rolling returns
+
+##### `rolling_vol(window: str = "63D", freq: Literal["calendar", "bars"] = "calendar", annualize: bool = True, trading_days: int = 252) -> pd.Series`
+
+Rolling volatility of returns.
+
+**Parameters:**
+- `window` (str): Window size
+- `freq` (Literal): "calendar" or "bars"
+- `annualize` (bool): If True, annualize the volatility
+- `trading_days` (int): Trading days per year for annualization
+
+**Returns:**
+- `pd.Series`: Series of rolling volatilities
+
+##### `rolling_sharpe(window: str = "63D", freq: Literal["calendar", "bars"] = "calendar", risk_free_rate: float = 0.0, trading_days: int = 252) -> pd.Series`
+
+Rolling Sharpe ratio over the given window.
+
+**Parameters:**
+- `window` (str): Window size
+- `freq` (Literal): "calendar" or "bars"
+- `risk_free_rate` (float): Annual risk-free rate
+- `trading_days` (int): Trading days per year
+
+**Returns:**
+- `pd.Series`: Series of rolling Sharpe ratios
+
+##### `rolling_drawdown(window: str = "252D", freq: Literal["calendar", "bars"] = "calendar") -> pd.Series`
+
+Rolling max drawdown.
+
+**Parameters:**
+- `window` (str): Window size
+- `freq` (Literal): "calendar" or "bars"
+
+**Returns:**
+- `pd.Series`: Series of rolling max drawdowns
+
+---
+
+#### Trade Analytics
+
+##### `trade_summary() -> Dict[str, Any]`
+
+Basic summary stats for trades.
+
+**Returns:**
+- Dictionary with `n_trades`, `win_rate`, `avg_win`, `avg_loss`, `expectancy`, `max_consecutive_wins`, `max_consecutive_losses`, `median_duration`
+
+##### `trade_distribution() -> Dict[str, Any]`
+
+Return distributions or precomputed quantiles for trade metrics.
+
+**Returns:**
+- Dictionary with quantiles for `pnl`, `pnl_pct`, `duration`
+
+##### `trade_analytics() -> TradeAnalytics`
+
+Get TradeAnalytics helper for detailed trade analysis.
+
+**Returns:**
+- `TradeAnalytics` instance with methods: `by_symbol()`, `by_month()`, `pnl_curve()`
+
+---
+
+#### Turnover & Cost Attribution
+
+##### `turnover(freq: str = "1M") -> pd.Series`
+
+Portfolio turnover per period.
+
+**Parameters:**
+- `freq` (str): Resampling frequency (e.g., "1M", "1D")
+
+**Returns:**
+- `pd.Series`: Series indexed by period end timestamp
+
+##### `average_slippage_per_share() -> float`
+
+Average slippage per share across all trades.
+
+##### `slippage_cost_series() -> pd.Series`
+
+Time series of cumulative slippage cost.
+
+##### `fee_cost_series() -> pd.Series`
+
+Time series of cumulative fees/commissions.
+
+---
+
+#### Factor Regression
+
+##### `factor_regression(factor_returns: pd.DataFrame, **kwargs) -> FactorRegressionResult`
+
+Run factor regression on strategy returns.
+
+**Parameters:**
+- `factor_returns` (pd.DataFrame): DataFrame with factor returns (columns = factors, index = datetime)
+- `**kwargs`: Additional arguments for factor_regression
+
+**Returns:**
+- `FactorRegressionResult` with alpha, betas, R², t-stats, etc.
+
+**Example:**
+```python
+factor_returns = pd.DataFrame({
+    "SPY": spy_returns,
+    "MKT": market_returns,
+}, index=dates)
+
+factor_result = result.factor_regression(factor_returns)
+print(f"Alpha: {factor_result.alpha:.4f}")
+print(f"Beta (SPY): {factor_result.betas['SPY']:.4f}")
+print(f"R²: {factor_result.r2:.4f}")
+```
+
+---
+
+#### Plotting
 
 ##### `plot_equity() -> None`
 
@@ -557,6 +986,89 @@ Plot the equity curve using matplotlib.
 ```python
 result = backtester.run(MyStrategy, data)
 result.plot_equity()  # Opens matplotlib window
+```
+
+---
+
+## Analysis
+
+### `alphaweave.analysis.factors`
+
+Factor regression and decomposition.
+
+#### `factor_regression(strategy_returns: pd.Series, factor_returns: pd.DataFrame, *, add_constant: bool = True) -> FactorRegressionResult`
+
+Run a simple OLS regression of strategy returns on factor returns.
+
+**Parameters:**
+- `strategy_returns` (pd.Series): Strategy returns series (indexed by datetime)
+- `factor_returns` (pd.DataFrame): Factor returns DataFrame (columns = factor names, index = datetime)
+- `add_constant` (bool): If True, add intercept term (alpha)
+
+**Returns:**
+- `FactorRegressionResult` with alpha, betas, R², t-stats, residual_std, n_obs
+
+#### `FactorRegressionResult`
+
+```python
+@dataclass
+class FactorRegressionResult:
+    alpha: float
+    betas: pd.Series         # index = factor names
+    residual_std: float
+    r2: float
+    tstats: pd.Series        # index = ["alpha"] + factor names
+    n_obs: int
+```
+
+---
+
+## Report Generation
+
+### `alphaweave.results.report`
+
+Generate HTML and Markdown reports for backtest results.
+
+#### `generate_markdown_report(result: BacktestResult, *, title: str = "Backtest Report", benchmark: Optional[pd.Series] = None, factor_returns: Optional[pd.DataFrame] = None) -> str`
+
+Generate a Markdown report summarizing the backtest.
+
+**Parameters:**
+- `result` (BacktestResult): BacktestResult to report on
+- `title` (str): Report title
+- `benchmark` (Optional[pd.Series]): Optional benchmark returns for comparison
+- `factor_returns` (Optional[pd.DataFrame]): Optional factor returns for regression
+
+**Returns:**
+- Markdown string
+
+#### `generate_html_report(result: BacktestResult, *, title: str = "Backtest Report", benchmark: Optional[pd.Series] = None, factor_returns: Optional[pd.DataFrame] = None, include_plots: bool = True) -> str`
+
+Generate an HTML report with optional embedded plots.
+
+**Parameters:**
+- `result` (BacktestResult): BacktestResult to report on
+- `title` (str): Report title
+- `benchmark` (Optional[pd.Series]): Optional benchmark returns for comparison
+- `factor_returns` (Optional[pd.DataFrame]): Optional factor returns for regression
+- `include_plots` (bool): If True, embed matplotlib plots as base64 images
+
+**Returns:**
+- HTML string
+
+**Example:**
+```python
+from alphaweave.results.report import generate_html_report
+
+html = generate_html_report(
+    result,
+    title="My Strategy Backtest",
+    factor_returns=factor_returns,
+    include_plots=True,
+)
+
+with open("report.html", "w") as f:
+    f.write(html)
 ```
 
 ---
@@ -721,8 +1233,9 @@ import polars as pl
 
 - **Datetime handling**: All Frames must have a datetime index. The Frame abstraction automatically handles conversion between pandas (index) and polars (column) representations.
 - **Column normalization**: Column names are automatically normalized to lowercase canonical forms (e.g., "Open" → "open", "Timestamp" → "datetime").
-- **Order execution**: Orders execute at the close price of the current bar with no slippage or fees (Sprint 0 simplification).
+- **Order execution**: Orders execute at the close price of the current bar. Fees and slippage can be configured via optional parameters.
 - **Portfolio tracking**: Positions are tracked with average entry price using weighted averages when adding to existing positions.
+- **Corporate actions**: Stock splits preserve portfolio value by adjusting position size and cost basis. Cash dividends are credited to portfolio cash.
 
 ---
 

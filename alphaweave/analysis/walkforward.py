@@ -83,6 +83,7 @@ def walk_forward_optimize(
     metric: Union[str, Callable[[BacktestResult], float]] = "sharpe",
     step: Optional[int] = None,
     strategy_base_kwargs: Optional[Dict[str, Any]] = None,
+    n_jobs: int = 1,
 ) -> WalkForwardResult:
     """Run a walk-forward optimization over the provided data."""
 
@@ -135,24 +136,60 @@ def walk_forward_optimize(
         best_score = -np.inf
         best_train_result = None
 
-        combos = product(*grid_values) if grid_keys else [()]
+        combos = list(product(*grid_values)) if grid_keys else [()]
+        combo_kwargs_list = []
         for combo in combos:
             combo_kwargs = base_kwargs.copy()
             combo_kwargs.update(dict(zip(grid_keys, combo)))
+            combo_kwargs_list.append(combo_kwargs)
 
-            train_result = backtester.run(
-                strategy_cls,
-                data=train_data,
-                capital=capital,
-                strategy_kwargs=combo_kwargs,
-            )
-            metric_value, score = _evaluate_metric(train_result, metric)
+        # Run training runs (parallel if n_jobs > 1)
+        if n_jobs == 1:
+            # Sequential
+            for combo_kwargs in combo_kwargs_list:
+                train_result = backtester.run(
+                    strategy_cls,
+                    data=train_data,
+                    capital=capital,
+                    strategy_kwargs=combo_kwargs,
+                )
+                metric_value, score = _evaluate_metric(train_result, metric)
 
-            if score > best_score:
-                best_score = score
-                best_metric_value = metric_value
-                best_params = combo_kwargs
-                best_train_result = train_result
+                if score > best_score:
+                    best_score = score
+                    best_metric_value = metric_value
+                    best_params = combo_kwargs
+                    best_train_result = train_result
+        else:
+            # Parallel training runs
+            from concurrent.futures import ProcessPoolExecutor
+
+            def _run_train(args):
+                combo_kwargs, train_data_slice = args
+                bt = VectorBacktester(
+                    performance_mode=getattr(backtester, "performance_mode", "default")
+                )
+                return (
+                    combo_kwargs,
+                    bt.run(
+                        strategy_cls,
+                        data=train_data_slice,
+                        capital=capital,
+                        strategy_kwargs=combo_kwargs,
+                    ),
+                )
+
+            jobs = [(ck, train_data) for ck in combo_kwargs_list]
+            with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                train_results = list(executor.map(_run_train, jobs))
+
+            for combo_kwargs, train_result in train_results:
+                metric_value, score = _evaluate_metric(train_result, metric)
+                if score > best_score:
+                    best_score = score
+                    best_metric_value = metric_value
+                    best_params = combo_kwargs
+                    best_train_result = train_result
 
         if best_params is None or best_train_result is None:
             break

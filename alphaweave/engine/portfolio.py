@@ -50,6 +50,41 @@ class Portfolio:
             return 0.0
         return position.size * price
 
+    def apply_split(self, symbol: str, ratio: float) -> None:
+        """
+        Apply a stock split to a position.
+
+        Adjusts position size and cost basis per share so that total position
+        cost remains unchanged.
+
+        Args:
+            symbol: Symbol of the position to split
+            ratio: Split ratio (e.g., 2.0 for a 2-for-1 split)
+        """
+        if ratio <= 0:
+            raise ValueError(f"Split ratio must be positive, got {ratio}")
+
+        position = self.positions.get(symbol)
+        if position is None:
+            return
+
+        # Multiply position size by ratio
+        new_size = position.size * ratio
+
+        # Divide cost basis per share by ratio to keep total cost unchanged
+        # Before: size * avg_price = total_cost
+        # After: (size * ratio) * (avg_price / ratio) = total_cost
+        new_avg_price = position.avg_price / ratio
+
+        if abs(new_size) < 1e-10:
+            self.positions.pop(symbol, None)
+        else:
+            self.positions[symbol] = Position(
+                symbol=symbol,
+                size=new_size,
+                avg_price=new_avg_price,
+            )
+
     def total_value(self, prices: Dict[str, float]) -> float:
         total = self.cash
         for symbol, position in self.positions.items():

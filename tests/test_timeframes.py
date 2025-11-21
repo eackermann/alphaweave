@@ -71,6 +71,11 @@ def test_multi_timeframe_close_behavior():
 
     expected_weekly = []
     for ts in daily_index:
+        # Ensure timezone compatibility
+        if ts.tz is not None and weekly_series.index.tz is None:
+            ts = ts.tz_localize(None)
+        elif ts.tz is None and weekly_series.index.tz is not None:
+            ts = ts.tz_localize("UTC")
         eligible = weekly_series.loc[:ts]
         if eligible.empty:
             expected_weekly.append(None)

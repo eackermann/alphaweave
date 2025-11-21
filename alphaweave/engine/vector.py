@@ -9,15 +9,19 @@ from types import SimpleNamespace
 import pandas as pd
 
 from alphaweave.core.frame import Frame
-from alphaweave.core.types import Fill, Order, OrderType
+from alphaweave.core.types import Bar, Fill, Order, OrderType
+from alphaweave.data.corporate_actions import CorporateActionsStore
+from alphaweave.data.events import EventStore
 from alphaweave.engine.base import BaseBacktester
 from alphaweave.engine.portfolio import Portfolio
 from alphaweave.engine.risk import RiskLimits
 from alphaweave.execution.fees import FeesModel, NoFees
+from alphaweave.execution.price_models import ExecutionPriceModel, ClosePriceModel
 from alphaweave.execution.slippage import SlippageModel, NoSlippage
 from alphaweave.execution.volume import VolumeLimitModel
 from alphaweave.results.result import BacktestResult
 from alphaweave.strategy.base import Strategy
+from alphaweave.utils.schedule import Schedule
 
 
 def _get_frame_index(frame: Frame) -> pd.DatetimeIndex:
@@ -69,6 +73,22 @@ def _align_data_to_calendar(
 class VectorBacktester(BaseBacktester):
     """Vector backtester with portfolio-aware execution."""
 
+    def __init__(
+        self,
+        performance_mode: str = "default",
+    ):
+        """
+        Initialize VectorBacktester.
+
+        Args:
+            performance_mode: Performance mode ("default" or "fast")
+                - "default": Full features, no optimizations
+                - "fast": Precompute numpy arrays for common operations
+        """
+        self.performance_mode = performance_mode
+        if performance_mode not in ("default", "fast"):
+            raise ValueError(f"performance_mode must be 'default' or 'fast', got '{performance_mode}'")
+
     def run(
         self,
         strategy_cls: Type[Strategy],
@@ -79,6 +99,10 @@ class VectorBacktester(BaseBacktester):
         strategy_kwargs: Optional[Dict[str, Any]] = None,
         volume_limit: Optional[VolumeLimitModel] = None,
         risk_limits: Optional[RiskLimits] = None,
+        corporate_actions: Optional[CorporateActionsStore] = None,
+        execution_price_model: Optional[ExecutionPriceModel] = None,
+        trade_at_next_open: bool = False,
+        events: Optional[EventStore] = None,
     ) -> BacktestResult:
         """Execute a backtest and return the results."""
 
@@ -106,15 +130,40 @@ class VectorBacktester(BaseBacktester):
         slippage_model = slippage or NoSlippage()
         volume_model = volume_limit or VolumeLimitModel()
         risk = risk_limits or RiskLimits()
+        price_model = execution_price_model or ClosePriceModel()
         kwargs = strategy_kwargs or {}
 
         strategy = strategy_cls(strategy_data, **kwargs) if kwargs else strategy_cls(strategy_data)
+        
+        # Wire up event store
+        strategy.set_event_store(events)
+        
+        # Wire up schedule helper
+        def get_current_index():
+            return strategy._current_index
+        
+        schedule = Schedule(
+            now_func=strategy.now,
+            index_accessor=get_current_index,
+        )
+        strategy._schedule = schedule
+        
+        # Fast mode: precompute numpy arrays
+        if self.performance_mode == "fast":
+            strategy._engine_has_fast_arrays = True
+            strategy._engine_close_np = {}
+            for symbol, frame in aligned_dict.items():
+                pdf = frame.to_pandas()
+                if "close" in pdf.columns:
+                    strategy._engine_close_np[symbol] = pdf["close"].to_numpy()
+        
         strategy.init()
 
         portfolio = Portfolio(capital)
         equity_series: list[float] = []
         trades: list[Fill] = []
         order_id = 0
+        pending_orders_for_next_bar: list[Order] = []  # For trade_at_next_open
 
         def _coerce_order(entry: Any) -> Optional[Order]:
             if isinstance(entry, Order):
@@ -131,6 +180,39 @@ class VectorBacktester(BaseBacktester):
                         target_percent=float(value),
                     )
             return None
+
+        def _row_to_bar(row: pd.Series, symbol: str, timestamp: pd.Timestamp) -> Bar:
+            """Convert a pandas Series row to a Bar object."""
+            return Bar(
+                datetime=timestamp.to_pydatetime(),
+                open=float(row.get("open", 0)),
+                high=float(row.get("high", 0)),
+                low=float(row.get("low", 0)),
+                close=float(row.get("close", 0)),
+                volume=float(row.get("volume", 0)) if pd.notna(row.get("volume")) else None,
+                symbol=symbol,
+            )
+
+        def _get_execution_price(
+            order: Order,
+            bar: Bar,
+            bar_row: pd.Series,
+        ) -> float:
+            """
+            Get execution price using execution_price_model or fallback to slippage model.
+            
+            If execution_price_model is provided, use it. Otherwise, fall back to
+            existing slippage model behavior for backward compatibility.
+            """
+            if execution_price_model is not None:
+                base_price = price_model.get_fill_price(bar, order)
+                # Apply slippage on top of execution price model if needed
+                # For now, we'll use the price model directly
+                # Slippage can be applied separately if desired
+                return base_price
+            else:
+                # Backward compatibility: use slippage model
+                return slippage_model.execute(order, SimpleNamespace(close=bar.close))
 
         def _apply_fill(
             src_order: Order,
@@ -158,6 +240,7 @@ class VectorBacktester(BaseBacktester):
         for i, timestamp in enumerate(calendar):
             prices: Dict[str, float] = {}
             bar_rows: Dict[str, pd.Series] = {}
+            bars: Dict[str, Bar] = {}
             for symbol, df in data_frames.items():
                 row = df.iloc[i]
                 bar_rows[symbol] = row
@@ -165,9 +248,35 @@ class VectorBacktester(BaseBacktester):
                 if pd.isna(close):
                     continue
                 prices[symbol] = float(close)
+                bars[symbol] = _row_to_bar(row, symbol, pd.Timestamp(timestamp))
 
             if not prices:
                 continue
+
+            # Apply corporate actions before processing orders
+            if corporate_actions is not None:
+                timestamp_dt = pd.Timestamp(timestamp).to_pydatetime()
+                
+                # Apply splits for all symbols
+                for symbol in prices.keys():
+                    splits = corporate_actions.get_splits_on_date(symbol, timestamp_dt)
+                    for split in splits:
+                        portfolio.apply_split(symbol, split.ratio)
+                
+                # Apply dividends for all symbols
+                for symbol in prices.keys():
+                    dividends = corporate_actions.get_dividends_on_date(symbol, timestamp_dt)
+                    for dividend in dividends:
+                        position = portfolio.positions.get(symbol)
+                        if position is not None:
+                            # Credit dividend: position size * dividend per share
+                            portfolio.cash += position.size * dividend.amount
+
+            # Execute pending orders from previous bar (trade_at_next_open)
+            orders_to_execute_this_bar: list[Order] = []
+            if trade_at_next_open and pending_orders_for_next_bar:
+                orders_to_execute_this_bar = pending_orders_for_next_bar
+                pending_orders_for_next_bar = []
 
             strategy._orders = []
             strategy._set_current_index(i)
@@ -180,11 +289,19 @@ class VectorBacktester(BaseBacktester):
                 if order is not None:
                     normalized_orders.append(order)
 
+            # Queue new orders for next bar if trade_at_next_open is enabled
+            if trade_at_next_open:
+                pending_orders_for_next_bar = normalized_orders.copy()
+                # Continue to process orders_to_execute_this_bar below
+            else:
+                # Execute orders immediately
+                orders_to_execute_this_bar.extend(normalized_orders)
+
             target_orders = [
-                o for o in normalized_orders if o.order_type == OrderType.TARGET_PERCENT
+                o for o in orders_to_execute_this_bar if o.order_type == OrderType.TARGET_PERCENT
             ]
             explicit_orders = [
-                o for o in normalized_orders if o.order_type != OrderType.TARGET_PERCENT
+                o for o in orders_to_execute_this_bar if o.order_type != OrderType.TARGET_PERCENT
             ]
 
             # Process target percent orders
@@ -238,9 +355,10 @@ class VectorBacktester(BaseBacktester):
                                 size=size_change,
                                 order_type=OrderType.MARKET,
                             )
-                            execution_price = slippage_model.execute(
-                                exec_order, SimpleNamespace(close=price)
-                            )
+                            bar = bars.get(symbol)
+                            if bar is None:
+                                continue
+                            execution_price = _get_execution_price(exec_order, bar, bar_row)
                             _apply_fill(exec_order, symbol, size_change, execution_price, timestamp)
 
             # Process explicit orders
@@ -284,9 +402,10 @@ class VectorBacktester(BaseBacktester):
                     size = clamp_size(desired_size)
                     if abs(size) > 1e-12:
                         exec_order = Order(symbol=symbol, size=size, order_type=OrderType.MARKET)
-                        exec_price = slippage_model.execute(
-                            exec_order, SimpleNamespace(close=price)
-                        )
+                        bar = bars.get(symbol)
+                        if bar is None:
+                            continue
+                        exec_price = _get_execution_price(exec_order, bar, row)
                         _apply_fill(exec_order, symbol, size, exec_price, timestamp)
                 elif order.order_type == OrderType.LIMIT and order.limit_price is not None:
                     if pd.notna(low) and pd.notna(high):
@@ -360,4 +479,6 @@ class VectorBacktester(BaseBacktester):
             equity_value = float(portfolio.total_value(prices))
             equity_series.append(equity_value)
 
-        return BacktestResult(equity_series=equity_series, trades=trades)
+        # Convert calendar to list for timestamps
+        timestamps = calendar.tolist() if hasattr(calendar, 'tolist') else list(calendar)
+        return BacktestResult(equity_series=equity_series, trades=trades, timestamps=timestamps)
