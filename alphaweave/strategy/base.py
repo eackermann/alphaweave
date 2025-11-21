@@ -1,6 +1,6 @@
 """Strategy base class for alphaweave."""
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Mapping, Optional, Union, TYPE_CHECKING
 from typing import Optional as TypingOptional
 from datetime import timedelta
 
@@ -13,6 +13,10 @@ from alphaweave.data.timeframes import resample_frame
 from alphaweave.indicators.sma import SMA
 from alphaweave.indicators.ema import EMA
 from alphaweave.utils.schedule import Schedule
+
+if TYPE_CHECKING:
+    from alphaweave.pipeline.pipeline import Pipeline
+    from alphaweave.monitoring.core import Monitor
 
 
 class Strategy:
@@ -38,6 +42,7 @@ class Strategy:
         self._resample_frame_cache: Dict[tuple[str, str], Frame] = {}  # Cache for resampled frames
         self._schedule: Optional[Any] = None  # Injected by engine
         self._event_store: Optional[Any] = None  # Injected by engine
+        self._monitor: Optional["Monitor"] = None  # Injected by engine
         # Fast mode support
         self._engine_has_fast_arrays: bool = False
         self._engine_close_np: Optional[Dict[str, Any]] = None
@@ -82,6 +87,26 @@ class Strategy:
             index: Current bar index (integer or pandas.Timestamp)
         """
         raise NotImplementedError("Subclasses must implement next()")
+
+    def log_metric(self, name: str, value: float) -> None:
+        """Log a scalar metric to the attached monitor if available."""
+        if getattr(self, "_monitor", None) is None:
+            return
+        timestamp = self.now()
+        if timestamp is not None:
+            ts = pd.Timestamp(timestamp)
+        else:
+            ts = pd.Timestamp.utcnow()
+        self._monitor.on_metric(name, float(value), ts.to_pydatetime())
+
+    # ------------------------------------------------------------------
+    def get_state(self) -> Mapping[str, Any]:
+        """Return strategy-specific serializable state."""
+        return {}
+
+    def set_state(self, state: Mapping[str, Any]) -> None:
+        """Restore strategy-specific state."""
+        return
 
     def register_timeframe(
         self, name: str, rule: str, symbols: Optional[List[str]] = None
@@ -631,4 +656,59 @@ class Strategy:
             raise ValueError(
                 f"Unsupported window format: {window}. Supported: 'XD' (days) or 'XH' (hours)"
             )
+
+    def run_pipeline(
+        self,
+        pipeline: "Pipeline",
+        window: Optional[str] = None,
+    ) -> Dict[str, Dict[str, pd.DataFrame]]:
+        """
+        Run a pipeline on the strategy's data.
+
+        Args:
+            pipeline: Pipeline instance to run
+            window: Optional window string (e.g., "3M", "126D") to slice data.
+                   If None, uses all available data up to current bar.
+
+        Returns:
+            Dictionary with keys:
+            - "factors": Dictionary of factor name -> DataFrame
+            - "filters": Dictionary of filter name -> DataFrame (boolean masks)
+            - "screen": Final screen DataFrame (boolean mask)
+
+        Example:
+            pipeline = Pipeline(
+                factors={"mom": MomentumFactor(window=63)},
+                screen=TopN("mom", 50)
+            )
+            result = self.run_pipeline(pipeline, window="126D")
+            mom_scores = result["factors"]["mom"].iloc[-1]
+        """
+        # Import here to avoid circular dependency
+        from alphaweave.pipeline.pipeline import Pipeline as PipelineClass
+
+        if not isinstance(pipeline, PipelineClass):
+            raise TypeError(f"pipeline must be Pipeline instance, got {type(pipeline)}")
+
+        # Get data dictionary
+        data_dict = self._get_timeframe_dict(None)
+
+        # Determine time range
+        end = self.now()
+        start = None
+
+        if window is not None:
+            # Parse window to timedelta
+            # Handle "M" for months (approximate as 30 days)
+            window_upper = window.strip().upper()
+            if window_upper.endswith("M"):
+                months = int(window_upper[:-1])
+                delta = timedelta(days=months * 30)
+            else:
+                delta = self._parse_window_to_timedelta(window)
+            if end is not None and delta.total_seconds() > 0:
+                start = end - delta
+
+        # Run pipeline
+        return pipeline.run(data_dict, start=start, end=end, cache=True)
 

@@ -15,6 +15,7 @@ Complete API reference for the alphaweave backtesting framework.
 - [Data Loaders](#data-loaders)
 - [Corporate Actions](#corporate-actions)
 - [Strategy API](#strategy-api)
+- [Factor Library & Pipeline API](#factor-library--pipeline-api)
 - [Backtesting Engine](#backtesting-engine)
 - [Results](#results)
 - [Utilities](#utilities)
@@ -665,6 +666,24 @@ self.order_target_percent("AAPL", 1.0)
 
 ---
 
+##### `log_metric(name: str, value: float) -> None`
+
+Log a custom scalar metric. If the engine was provided with a `monitor`, the metric is forwarded (with the current timestamp) via `Monitor.on_metric`. If no monitor is attached, the call is a no-op.
+
+Useful for tracking strategy-specific diagnostics like signal strength or risk estimates that later appear in dashboards.
+
+---
+
+##### `get_state() -> Mapping[str, Any]`
+
+Override to expose strategy-specific serializable state used for live persistence/restarts. Default returns `{}`.
+
+##### `set_state(state: Mapping[str, Any]) -> None`
+
+Inverse of `get_state`. Called by live runners when restoring from persisted state. Default implementation is a no-op.
+
+---
+
 ## Backtesting Engine
 
 ### `alphaweave.engine.base.BaseBacktester`
@@ -713,6 +732,29 @@ The VectorBacktester implements a simple execution model:
 4. **Returns**: `BacktestResult` with equity series and trades
 
 #### Simplifications (Sprint 0)
+#### Monitoring Parameters
+
+`VectorBacktester.run()` now accepts:
+
+- `monitor` (`Optional[Monitor]`): Hook that receives `on_run_start`, per-bar `BarSnapshot`, per-trade `TradeRecord`, arbitrary metrics, and `on_run_end`.
+- `monitor_meta` (`Optional[Mapping[str, Any]]`): Metadata merged into the dictionary passed to `monitor.on_run_start`. By default the backtester reports `mode="backtest"`, `performance_mode`, `trade_at_next_open`, and `capital`.
+
+When `monitor` is supplied, `Strategy.log_metric()` will forward custom metrics to the same monitor.
+
+---
+
+### `alphaweave.live.LiveEngine`
+
+Simple facade that reuses `VectorBacktester` for live/replay workflows while tagging monitor metadata with `mode="live"`.
+
+```python
+from alphaweave.live.engine import LiveEngine
+
+engine = LiveEngine(monitor=my_monitor)
+result = engine.run(MyStrategy, data={"AAPL": frame}, capital=10_000.0)
+```
+
+Arguments mirror `VectorBacktester.run`, and you can still override `monitor`/`monitor_meta` per call.
 
 - **No slippage**: Orders execute exactly at the close price
 - **No fees**: No commission or transaction costs
@@ -1247,6 +1289,21 @@ import polars as pl
 
 Portfolio optimization algorithms for constructing optimal asset allocations.
 
+#### Cost & Turnover Helpers
+
+- `alphaweave.portfolio.costs.TransactionCostModel`: base interface with `estimate_cost(current_weights, target_weights, prices=None, volumes=None) -> float`.
+- Concrete models:
+  - `ProportionalCostModel(cost_per_dollar)` — linear turnover cost (scalar or per-asset series).
+  - `SpreadBasedCostModel(spread_bps, participation_rate=1.0)` — models half-spread * turnover.
+  - `ImpactCostModel(adv, impact_coeff=0.1)` — square-root market impact using average daily volume.
+  - `CompositeCostModel(components=list[TransactionCostModel])` — sums multiple models.
+- `alphaweave.portfolio.turnover`:
+  - `compute_turnover(prev, target)` — sum of absolute weight changes.
+  - `TurnoverConstraint(max_turnover=None, max_change_per_asset=None)` — hard caps.
+  - `RebalancePenalty(lambda_rebalance=1.0)` — soft penalty that shrinks weights back toward `prev_weights`.
+
+All optimizers accept these objects via optional keyword arguments so that realism is opt-in and backward compatible.
+
 #### `equal_weight(assets: Sequence[str], *, constraints: Optional[PortfolioConstraints] = None) -> OptimizationResult`
 
 Equal weight portfolio optimizer.
@@ -1268,16 +1325,21 @@ weights = result.weights  # Series with equal weights (1/3 each)
 
 ---
 
-#### `mean_variance(expected_returns: Weights, cov_matrix: pd.DataFrame, *, risk_free_rate: float = 0.0, max_weight: Optional[float] = None, constraints: Optional[PortfolioConstraints] = None) -> OptimizationResult`
+#### `mean_variance(expected_returns: Weights, cov_matrix: pd.DataFrame, *, risk_free_rate: float = 0.0, max_weight: Optional[float] = None, constraints: Optional[PortfolioConstraints] = None, prev_weights: Optional[pd.Series] = None, transaction_cost_model: Optional[TransactionCostModel] = None, turnover_constraint: Optional[TurnoverConstraint] = None, rebalance_penalty: Optional[RebalancePenalty] = None, prices: Optional[pd.Series] = None, volumes: Optional[pd.Series] = None) -> OptimizationResult`
 
 Mean-variance optimizer (maximize Sharpe ratio).
 
 **Parameters:**
-- `expected_returns` (Weights): Expected returns per asset
-- `cov_matrix` (pd.DataFrame): Covariance matrix
-- `risk_free_rate` (float): Risk-free rate for Sharpe calculation
-- `max_weight` (Optional[float]): Maximum weight per asset
-- `constraints` (Optional[PortfolioConstraints]): Optional portfolio constraints
+- `expected_returns` (Weights): Expected returns per asset.
+- `cov_matrix` (pd.DataFrame): Covariance matrix (aligned to expected_returns).
+- `risk_free_rate` (float): Risk-free rate for Sharpe calculation.
+- `max_weight` (Optional[float]): Maximum weight per asset.
+- `constraints` (Optional[PortfolioConstraints]): Optional portfolio constraints.
+- `prev_weights` (Optional[pd.Series]): Previous rebalance weights (default zeros). Required when using costs/turnover controls.
+- `transaction_cost_model` (Optional[TransactionCostModel]): Estimated cost penalty incorporated directly into the optimization objective.
+- `turnover_constraint` (Optional[TurnoverConstraint]): Hard caps on total turnover and/or per-asset change.
+- `rebalance_penalty` (Optional[RebalancePenalty]): Soft shrinkage back toward `prev_weights`.
+- `prices` / `volumes` (Optional[pd.Series]): Optional market data passed through to the cost model.
 
 **Returns:**
 - `OptimizationResult` with optimized weights
@@ -1295,27 +1357,29 @@ weights = result.weights  # Optimized weights maximizing Sharpe
 
 ---
 
-#### `min_variance(cov_matrix: pd.DataFrame, *, max_weight: Optional[float] = None, constraints: Optional[PortfolioConstraints] = None) -> OptimizationResult`
+#### `min_variance(cov_matrix: Optional[pd.DataFrame] = None, *, risk_model: Optional[RiskModel] = None, max_weight: Optional[float] = None, constraints: Optional[PortfolioConstraints] = None, prev_weights: Optional[pd.Series] = None, transaction_cost_model: Optional[TransactionCostModel] = None, turnover_constraint: Optional[TurnoverConstraint] = None, rebalance_penalty: Optional[RebalancePenalty] = None, prices: Optional[pd.Series] = None, volumes: Optional[pd.Series] = None) -> OptimizationResult`
 
 Minimum variance optimizer.
 
 **Parameters:**
-- `cov_matrix` (pd.DataFrame): Covariance matrix
-- `max_weight` (Optional[float]): Maximum weight per asset
-- `constraints` (Optional[PortfolioConstraints]): Optional portfolio constraints
+- `cov_matrix` / `risk_model`: Provide either a covariance matrix or a `RiskModel` supplying one.
+- `max_weight`: Maximum weight per asset.
+- `constraints`: Optional portfolio constraints.
+- `prev_weights`, `transaction_cost_model`, `turnover_constraint`, `rebalance_penalty`, `prices`, `volumes`: same semantics as `mean_variance`.
 
 **Returns:**
 - `OptimizationResult` with minimum variance weights
 
 ---
 
-#### `risk_parity(cov_matrix: pd.DataFrame, *, constraints: Optional[PortfolioConstraints] = None) -> OptimizationResult`
+#### `risk_parity(cov_matrix: Optional[pd.DataFrame] = None, *, risk_model: Optional[RiskModel] = None, constraints: Optional[PortfolioConstraints] = None, prev_weights: Optional[pd.Series] = None, transaction_cost_model: Optional[TransactionCostModel] = None, turnover_constraint: Optional[TurnoverConstraint] = None, rebalance_penalty: Optional[RebalancePenalty] = None, prices: Optional[pd.Series] = None, volumes: Optional[pd.Series] = None) -> OptimizationResult`
 
 Risk parity optimizer (equal risk contribution).
 
 **Parameters:**
-- `cov_matrix` (pd.DataFrame): Covariance matrix
-- `constraints` (Optional[PortfolioConstraints]): Optional portfolio constraints
+- `cov_matrix` / `risk_model`: Covariance input for risk contributions.
+- `constraints`: Optional portfolio constraints.
+- `prev_weights`, `transaction_cost_model`, `turnover_constraint`, `rebalance_penalty`, `prices`, `volumes`: optional realism knobs identical to `mean_variance`.
 
 **Returns:**
 - `OptimizationResult` with risk parity weights
@@ -1429,7 +1493,92 @@ class WeightBounds:
 
 ---
 
+## Monitoring & Dashboards
+
+### `alphaweave.monitoring.core`
+
+- `BarSnapshot`: dataclass capturing bar-level state (`timestamp`, `prices`, `equity`, `cash`, `positions`, `pnl`, `drawdown`, etc.).
+- `TradeRecord`: dataclass for executed fills (`symbol`, `side`, `price`, `size`, `fees`, `slippage`, ...).
+- `Monitor`: protocol defining `on_run_start()`, `on_bar()`, `on_trade()`, `on_metric()`, and `on_run_end()`.
+- `InMemoryMonitor`: default implementation that stores bars/trades/metrics in memory and exposes `bars_df()`, `trades_df()`, `metrics_df()`.
+
+### `alphaweave.monitoring.run.RunMonitor`
+
+Wrap an `InMemoryMonitor` and gain derived analytics:
+
+- `equity_curve()` / `drawdown_curve()`
+- `exposure_over_time()`
+- `turnover_over_time()`
+- `cost_over_time()`
+
+### `alphaweave.monitoring.plots`
+
+Matplotlib helpers returning `Figure` objects:
+
+- `plot_equity_and_drawdown(run)`
+- `plot_exposure_heatmap(run)`
+- `plot_turnover(run)`
+- `plot_trade_pnl_histogram(run)`
+
+### `alphaweave.monitoring.dashboard.generate_html_dashboard`
+
+Produce a self-contained HTML dashboard embedding the plots above, overview stats, a trades table, and (optionally) live-vs-backtest drift comparisons.
+
+### `alphaweave.analysis.compute_live_drift_series`
+
+Align backtest equity with a `RunMonitor`'s live equity and return `(live - backtest) / backtest` for drift monitoring.
+
+---
+
+## Live Trading Stack
+
+### `alphaweave.live.broker`
+
+- `BrokerFill` / `BrokerAccountState` dataclasses describe fills and account snapshots.
+- `Broker` protocol defines the minimal interface (`submit_order`, `cancel_order`, `get_open_orders`, `get_account_state`, `poll_fills`).
+
+### `alphaweave.live.adapters`
+
+- `BrokerConfig`: normalized config payload for adapters.
+- Concrete adapters:
+  - `MockBrokerAdapter` – instant fills using the backtester portfolio model.
+  - `PaperBrokerAdapter` – thin wrapper over the mock adapter with friendlier config defaults.
+  - `IBKRAdapter`, `AlpacaAdapter`, `BinanceAdapter` skeletons (raise `NotImplementedError` until wired to real APIs).
+
+### `alphaweave.live.config`
+
+- `LiveConfig`: dataclass containing broker/strategy/datafeed/risk/monitor/persistence sections.
+- `load_live_config(path)` reads YAML or JSON (PyYAML optional). Use `parse_live_config(mapping)` if you already have a dict.
+
+### `alphaweave.live.runner.LiveRunner`
+
+High-level orchestrator:
+
+```python
+from alphaweave.live.config import load_live_config
+from alphaweave.live.runner import LiveRunner
+
+cfg = load_live_config("examples/live_config_template.yaml")
+runner = LiveRunner.from_config(cfg)
+run_monitor = runner.run()
+```
+
+- Builds the broker adapter, replay datafeed, strategy (via dotted path), `LiveEngine`, and `InMemoryMonitor`.
+- Writes dashboards (`monitor.dashboard_html`) and persists broker snapshots (`persistence.state_path`) after each run.
+- Provides a `RunMonitor` for downstream analysis.
+
+### `alphaweave.live.state`
+
+- `LiveState` dataclass plus `save_live_state(path, state)` / `load_live_state(path)` helpers.
+- Strategies can override `get_state/set_state` to persist custom fields.
+
+### `alphaweave.live.datafeed`
+
+- `ReplayDataFeed`: convenience wrapper over static Frames; used by LiveRunner for deterministic dry runs/replays.
+
+---
+
 ## Version
 
-This documentation corresponds to **alphaweave version 0.0.1** (Sprints 0-11).
+This documentation corresponds to **alphaweave version 0.0.1** (Sprints 0-18).
 

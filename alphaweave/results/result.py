@@ -533,6 +533,62 @@ class BacktestResult:
 
         return fee_series.cumsum()
 
+    def realized_cost_series(self) -> pd.Series:
+        """
+        Cumulative realized execution costs (fees + slippage).
+
+        Returns:
+            Series of cumulative costs indexed by trade exit time when available.
+        """
+        trades_df = self.trades
+        if trades_df.empty:
+            return pd.Series(dtype=float)
+
+        cost_components = []
+        for column in ("fees", "slippage"):
+            if column in trades_df.columns:
+                cost_components.append(trades_df[column])
+
+        if not cost_components:
+            return pd.Series(dtype=float)
+
+        total_cost = sum(cost_components)
+        if "exit_time" in trades_df.columns:
+            index = pd.to_datetime(trades_df["exit_time"])
+        elif "entry_time" in trades_df.columns:
+            index = pd.to_datetime(trades_df["entry_time"])
+        else:
+            index = pd.RangeIndex(len(total_cost))
+
+        cost_series = pd.Series(total_cost.values, index=index)
+        return cost_series.cumsum()
+
+    def realized_cost_per_turnover(self) -> float:
+        """
+        Estimate realized cost per unit of turnover based on historical trades.
+        """
+        trades_df = self.trades
+        if trades_df.empty:
+            return 0.0
+
+        total_cost = 0.0
+        if "fees" in trades_df.columns:
+            total_cost += trades_df["fees"].abs().sum()
+        if "slippage" in trades_df.columns:
+            total_cost += trades_df["slippage"].abs().sum()
+
+        if total_cost == 0:
+            return 0.0
+
+        if "size" not in trades_df.columns:
+            return 0.0
+
+        total_turnover = trades_df["size"].abs().sum()
+        if total_turnover == 0:
+            return 0.0
+
+        return float(total_cost / (0.5 * total_turnover))
+
     def factor_regression(
         self,
         factor_returns: pd.DataFrame,

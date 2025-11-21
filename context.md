@@ -338,14 +338,35 @@ Main backtesting engine:
 - `optimizers`: Portfolio optimizers (equal weight, mean-variance, min-variance, risk parity, target volatility)
 - `constraints`: Portfolio constraint definitions (weight bounds, long-only, leverage caps)
 - `risk`: Risk estimation helpers (covariance, volatility)
+- `costs`: Portfolio-level transaction cost models (proportional, spread, impact, composite)
+- `turnover`: Turnover utilities (`compute_turnover`, `TurnoverConstraint`, `RebalancePenalty`)
 - `universe`: Universe selection and ranking utilities
 
 **Design Notes:**
 - Optimizers are pure functions - no implicit data access
 - Strategies build inputs (returns, covariance) and call optimizers
+- Optional `prev_weights`, cost models, and turnover controls let strategies remain simple while enabling realism
 - Optimizers return weights that strategies apply via order_target_percent
 - Uses scipy.optimize for constrained optimization
 - Supports both sample and EWMA covariance estimation
+
+### `alphaweave.monitoring`
+
+- `monitoring.core`: `BarSnapshot`, `TradeRecord`, `Monitor` protocol, and `InMemoryMonitor`
+- `monitoring.run`: `RunMonitor` exposes equity/drawdown/exposure/turnover/cost series
+- `monitoring.plots` + `monitoring.dashboard`: basic visualization and HTML-report helpers
+- `analysis.compute_live_drift_series`: aligns live monitoring data with backtests
+- Engines pass `monitor` down to strategies (`Strategy.log_metric`) so the same instrumentation works for backtest and (future) live engines.
+
+### `alphaweave.live`
+
+- `live.broker`: broker protocol + account/fill dataclasses
+- `live.adapters`: `MockBrokerAdapter`, `PaperBrokerAdapter`, and skeletons for IBKR/Alpaca/Binance
+- `live.config`: `LiveConfig`, YAML/JSON loader
+- `live.runner`: orchestrates broker + datafeed + strategy + monitoring, writes dashboards/state snapshots
+- `live.state`: persistence helpers (`LiveState`, `save_live_state`, `load_live_state`)
+- `live.datafeed`: `ReplayDataFeed` placeholder for future realtime integrations
+- `Strategy.get_state/set_state` now available for user-defined persistence
 
 ---
 

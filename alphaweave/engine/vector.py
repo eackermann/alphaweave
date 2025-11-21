@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional, Type, Union
+from typing import Any, Dict, Mapping, Optional, Type, Union
 from types import SimpleNamespace
 
 import pandas as pd
@@ -19,6 +19,7 @@ from alphaweave.execution.fees import FeesModel, NoFees
 from alphaweave.execution.price_models import ExecutionPriceModel, ClosePriceModel
 from alphaweave.execution.slippage import SlippageModel, NoSlippage
 from alphaweave.execution.volume import VolumeLimitModel
+from alphaweave.monitoring.core import BarSnapshot, Monitor, TradeRecord
 from alphaweave.results.result import BacktestResult
 from alphaweave.strategy.base import Strategy
 from alphaweave.utils.schedule import Schedule
@@ -103,6 +104,8 @@ class VectorBacktester(BaseBacktester):
         execution_price_model: Optional[ExecutionPriceModel] = None,
         trade_at_next_open: bool = False,
         events: Optional[EventStore] = None,
+        monitor: Optional[Monitor] = None,
+        monitor_meta: Optional[Mapping[str, Any]] = None,
     ) -> BacktestResult:
         """Execute a backtest and return the results."""
 
@@ -134,6 +137,17 @@ class VectorBacktester(BaseBacktester):
         kwargs = strategy_kwargs or {}
 
         strategy = strategy_cls(strategy_data, **kwargs) if kwargs else strategy_cls(strategy_data)
+        strategy._monitor = monitor  # type: ignore[attr-defined]
+        if monitor is not None:
+            meta = {
+                "mode": "backtest",
+                "performance_mode": self.performance_mode,
+                "trade_at_next_open": trade_at_next_open,
+                "capital": capital,
+            }
+            if monitor_meta:
+                meta.update(monitor_meta)
+            monitor.on_run_start(meta=meta)
         
         # Wire up event store
         strategy.set_event_store(events)
@@ -164,6 +178,8 @@ class VectorBacktester(BaseBacktester):
         trades: list[Fill] = []
         order_id = 0
         pending_orders_for_next_bar: list[Order] = []  # For trade_at_next_open
+        prev_equity = capital
+        running_max_equity = capital
 
         def _coerce_order(entry: Any) -> Optional[Order]:
             if isinstance(entry, Order):
@@ -236,6 +252,20 @@ class VectorBacktester(BaseBacktester):
             portfolio.apply_fill(fill)
             portfolio.cash -= fee
             trades.append(fill)
+
+            if monitor is not None:
+                trade_record = TradeRecord(
+                    timestamp=fill.datetime,
+                    symbol=symbol,
+                    side="buy" if size > 0 else "sell",
+                    price=price,
+                    size=size,
+                    fees=fee,
+                    slippage=None,
+                    order_id=str(fill.order_id),
+                    strategy_tag=strategy.__class__.__name__,
+                )
+                monitor.on_trade(trade_record)
 
         for i, timestamp in enumerate(calendar):
             prices: Dict[str, float] = {}
@@ -477,8 +507,40 @@ class VectorBacktester(BaseBacktester):
                                 _apply_fill(exec_order, symbol, size, limit, timestamp)
 
             equity_value = float(portfolio.total_value(prices))
+            positions_value = equity_value - portfolio.cash
+            gross_exposure = 0.0
+            for symbol, position in portfolio.positions.items():
+                price = prices.get(symbol, 0.0)
+                gross_exposure += abs(position.size * price)
+            leverage = gross_exposure / equity_value if equity_value != 0 else None
+
+            bar_pnl = equity_value - prev_equity
+            running_max_equity = max(running_max_equity, equity_value)
+            current_drawdown = (
+                (equity_value / running_max_equity) - 1.0
+                if running_max_equity > 0
+                else 0.0
+            )
+
+            if monitor is not None:
+                snapshot = BarSnapshot(
+                    timestamp=pd.Timestamp(timestamp).to_pydatetime(),
+                    prices=dict(prices),
+                    equity=equity_value,
+                    cash=portfolio.cash,
+                    positions_value=positions_value,
+                    positions={sym: pos.size for sym, pos in portfolio.positions.items()},
+                    leverage=leverage,
+                    pnl=bar_pnl,
+                    drawdown=current_drawdown,
+                )
+                monitor.on_bar(snapshot)
+
+            prev_equity = equity_value
             equity_series.append(equity_value)
 
         # Convert calendar to list for timestamps
-        timestamps = calendar.tolist() if hasattr(calendar, 'tolist') else list(calendar)
+        timestamps = calendar.tolist() if hasattr(calendar, "tolist") else list(calendar)
+        if monitor is not None:
+            monitor.on_run_end()
         return BacktestResult(equity_series=equity_series, trades=trades, timestamps=timestamps)

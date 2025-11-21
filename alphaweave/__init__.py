@@ -14,6 +14,8 @@ from . import results
 from . import utils
 from . import indicators
 from . import signals
+from . import monitoring
+from . import live
 
 __all__ = [
     "Frame",
@@ -25,4 +27,6 @@ __all__ = [
     "utils",
     "indicators",
     "signals",
+    "monitoring",
+    "live",
 ]

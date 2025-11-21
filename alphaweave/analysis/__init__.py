@@ -13,6 +13,7 @@ from .walkforward import (
     WalkForwardResult,
     walk_forward_optimize,
 )
+from .drift import compute_live_drift_series
 
 __all__ = [
     "MultiRunResult",
@@ -24,4 +25,5 @@ __all__ = [
     "WalkForwardWindowResult",
     "WalkForwardResult",
     "walk_forward_optimize",
+    "compute_live_drift_series",
 ]

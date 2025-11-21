@@ -1,0 +1,26 @@
+broker:
+  name: paper
+  account_id: null
+  extra:
+    initial_cash: 100000
+
+strategy:
+  class: "examples.strategy_sma_crossover.SMACrossoverStrategy"
+  params: {}
+
+datafeed:
+  type: replay
+  path: "alphaweave/data"
+  symbols: ["SPY"]
+  capital: 100000
+
+monitor:
+  dashboard_html: "output/live_dashboard.html"
+  dashboard_title: "Paper Trading Dashboard"
+
+persistence:
+  state_path: "state/paper_state.pkl"
+
+risk:
+  max_capital: 150000
+

@@ -214,6 +214,20 @@ class OptimizedPortfolio(Strategy):
             self.order_target_percent(symbol, w)
 ```
 
+Need cost-aware realism? Track `prev_weights` inside your strategy, build a `TransactionCostModel`, and pass the optional knobs (`prev_weights`, `transaction_cost_model`, `turnover_constraint`, `rebalance_penalty`) into `mean_variance`, `min_variance`, or `risk_parity`. See `docs/sprint_16_cost_turnover.md` plus the new examples under `examples/cost_aware_*` for a complete pattern that keeps the Strategy API untouched.
+
+### Monitoring & Dashboards
+
+- Plug an `InMemoryMonitor` into `VectorBacktester`/`LiveEngine` to capture `BarSnapshot`s, trades, and custom metrics via `Strategy.log_metric`.
+- Wrap it with `RunMonitor` for convenient pandas access (`equity_curve`, `drawdown_curve`, exposures, turnover, costs).
+- Use `alphaweave.monitoring.plots` or `generate_html_dashboard` for a zero-dependency report; check `examples/backtest_with_dashboard.py`, `examples/live_replay_with_dashboard.py`, and `examples/strategy_custom_metrics_logging.py`.
+
+### Live Runner & Brokers
+
+- `alphaweave.live.broker` defines a lightweight broker protocol; adapters live under `alphaweave.live.adapters.*` (mock, paper, IBKR, Alpaca, Binance skeletons).
+- `LiveConfig` + `LiveRunner` wire datafeed, broker, strategy, and monitoring with a few lines of config—see `examples/live_mock_runner.py`, `examples/live_paper_runner.py`, and `examples/live_config_template.yaml`.
+- `LiveState` persistence + `Strategy.get_state/set_state` hooks provide checkpoints for replay/paper/live workflows.
+
 ## Documentation
 
 - **[API.md](API.md)**: Complete API reference
