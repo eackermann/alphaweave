@@ -1,0 +1,29 @@
+[project]
+name = "alphaweave"
+version = "0.0.1"
+description = "Weave data. Craft alpha. — alphaweave backtesting framework (Sprint 0)"
+readme = "README.md"
+requires-python = ">=3.11,<4.0"
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.25",
+    "polars>=0.19",
+    "pyarrow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "matplotlib>=3.7",
+]
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
